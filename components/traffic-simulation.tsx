@@ -117,18 +117,25 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
   const [activeTab, setActiveTab] = useState("simulation");
   const [loading, setLoading] = useState(false);
   const [changingChoice, setChangingChoice] = useState(false);
+  const [changeChoiceError, setChangeChoiceError] = useState<string | null>(null);
   const roundStartTimeRef = useRef<number>(Date.now());
+  const gameStateRef = useRef<GameState | null>(null);
+
+useEffect(() => {
+  gameStateRef.current = gameState;
+}, [gameState]);
 
   // State for submitted waiting view
-  const [submittedState, setSubmittedState] = useState<{
+const [submittedState, setSubmittedState] = useState<{
     playerChoice: string | null;
+    playerPredictedTime: number | null;
     playerRealizedTime: number | null;
+    allSubmitted: boolean;
     choiceDistribution: Record<string, number>;
     totalSubmitted: number;
     routes: Record<string, Route>;
     predictedTimes: Record<string, number>;
   } | null>(null);
-
   const handleStartGame = useCallback(async () => {
     setLoading(true);
     try {
@@ -193,9 +200,9 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
 
         // Update selected route with realized time
         const selectedRoute = gameState.routes[routeName];
-        const updatedSelectedRoute: Route = {
+const updatedSelectedRoute: Route = {
           ...selectedRoute,
-          totalTravelTime: result.realized_time,
+          totalTravelTime: result.predicted_time,
         };
 
         // Create log entry with route and grid data for visualization
@@ -208,7 +215,7 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
           selectedRoute: routeName,
           decisionLatency,
           predictedTime: result.predicted_time,
-          realizedTime: result.realized_time,
+          realizedTime: result.predicted_time, // placeholder, updated after admin advances
           routeAFlow: result.route_flows["Route A"],
           routeBFlow: result.route_flows["Route B"],
           routeCFlow: result.route_flows["Route C"],
@@ -239,9 +246,10 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
     setHoveredRouteName(null);
   }, [gameState, sessionId]);
 
-  const handleChangeChoice = useCallback(async (newRouteName: string) => {
+const handleChangeChoice = useCallback(async (newRouteName: string) => {
     if (!sessionId || !submittedState) return;
     if (newRouteName === submittedState.playerChoice) return;
+    if (changingChoice) return; // prevent concurrent calls
 
     setChangingChoice(true);
     try {
@@ -253,24 +261,48 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
           new_route: newRouteName,
         }),
       });
-      const data = await response.json();
-
+const data = await response.json();
       if (data.status === "success") {
-        const result = data.round_result;
         setSubmittedState(prev => prev ? {
           ...prev,
           playerChoice: newRouteName,
-          playerRealizedTime: result.realized_time,
         } : null);
+
+        // Update last log entry so history and logs tab reflect the final choice
+        setGameState(prev => {
+          if (!prev || prev.logs.length === 0) return prev;
+          const updatedLogs = [...prev.logs];
+          const lastIndex = updatedLogs.length - 1;
+          const newRouteData = prev.routes[newRouteName];
+          updatedLogs[lastIndex] = {
+            ...updatedLogs[lastIndex],
+            chosenRoute: newRouteName,
+            selectedRoute: newRouteName,
+            routeData: newRouteData
+              ? { ...newRouteData, totalTravelTime: updatedLogs[lastIndex].predictedTime }
+              : updatedLogs[lastIndex].routeData,
+          };
+          return {
+            ...prev,
+            selectedRoute: newRouteData
+              ? { ...newRouteData, totalTravelTime: updatedLogs[lastIndex].predictedTime }
+              : prev.selectedRoute,
+            logs: updatedLogs,
+          };
+        });
+      } else if (data.status !== "success") {
+        setChangeChoiceError(data.message || "Failed to change route. Please try again.");
       }
     } catch (error) {
       console.error("Error changing choice:", error);
     }
     setChangingChoice(false);
-  }, [sessionId, submittedState]);
+ }, [sessionId, submittedState, changingChoice]);
 
-  const handleNextRound = useCallback(async () => {
+const handleNextRound = useCallback(async () => {
     if (!sessionId) return;
+
+   const prevRoutes = gameStateRef.current?.routes ?? {};
 
     // Fetch current state from server
     setLoading(true);
@@ -294,17 +326,17 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
         for (const [name, apiRoute] of Object.entries(data.routes as Record<string, APIRoute>)) {
           routes[name] = convertAPIRouteToRoute(name, apiRoute, edges);
         }
-
-        setSubmittedState({
+setSubmittedState({
           playerChoice: data.player_choice,
+          playerPredictedTime: data.player_predicted_time || null,
           playerRealizedTime: data.player_realized_time,
+          allSubmitted: data.all_submitted || false,
           choiceDistribution: data.choice_distribution || {},
           totalSubmitted: data.total_submitted || 0,
           routes,
           predictedTimes: data.predicted_times,
         });
-
-        setGameState((prev) => {
+setGameState((prev) => {
           if (!prev) {
             return {
               currentRound: data.current_round,
@@ -379,19 +411,42 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
             routes,
             predictedTimes: data.predicted_times,
             selectedRoute: null,
+            logs: prev.logs, // preserve existing rich log entries
             phase: "selecting",
             gameOver: data.game_over,
           };
         });
-        setSubmittedState(null); // Clear submitted state when moving to new round
+setSubmittedState(null);
+        // Update the last log entry with realized time from server, keeping nodes/edges/routeData
+if (data.logs && data.logs.length > 0) {
+          const serverLastLog = data.logs[data.logs.length - 1];
+          setGameState(prev => {
+            if (!prev || prev.logs.length === 0) return prev;
+            const updatedLogs = [...prev.logs];
+            const lastIndex = updatedLogs.length - 1;
+            const finalRoute = prevRoutes[serverLastLog.chosen_route];
+            updatedLogs[lastIndex] = {
+              ...updatedLogs[lastIndex],
+              chosenRoute: serverLastLog.chosen_route ?? updatedLogs[lastIndex].chosenRoute,
+              selectedRoute: serverLastLog.chosen_route ?? updatedLogs[lastIndex].selectedRoute,
+              realizedTime: serverLastLog.realized_time ?? updatedLogs[lastIndex].realizedTime,
+              predictedTime: serverLastLog.predicted_time ?? updatedLogs[lastIndex].predictedTime,
+              routeData: finalRoute
+                ? { ...finalRoute, totalTravelTime: serverLastLog.predicted_time ?? updatedLogs[lastIndex].predictedTime }
+                : updatedLogs[lastIndex].routeData,
+              nodes: updatedLogs[lastIndex].nodes,
+              edges: updatedLogs[lastIndex].edges,
+            };
+            return { ...prev, logs: updatedLogs };
+          });
+        }
         roundStartTimeRef.current = Date.now();
       }
     } catch (error) {
       console.error("Error fetching next round:", error);
     }
     setLoading(false);
-  }, [sessionId]);
-
+}, [sessionId]);
   useEffect(() => {
     if (initialSessionId) {
       handleNextRound();
@@ -600,28 +655,44 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
                             <h3 className="text-lg font-semibold text-green-600 mb-2">
                               Choice Submitted!
                             </h3>
-                            <p className="text-muted-foreground">
+<p className="text-muted-foreground">
                               You chose{" "}
                               <span className="font-medium text-foreground">
                                 {submittedState.playerChoice}
-                              </span>{" "}
-                              with a realized time of{" "}
-                              <span className="font-medium text-foreground">
-                                {submittedState.playerRealizedTime?.toFixed(1)} minutes
                               </span>
                             </p>
                           </div>
 
-                          {/* Realized Time Display */}
-                          <div className="p-4 rounded-lg bg-green-500/10 border border-green-200">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Clock className="h-4 w-4 text-green-600" />
-                              <span className="font-medium text-green-600">Your Realized Travel Time</span>
+{/* Times display */}
+                          {submittedState.allSubmitted ? (
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="p-4 rounded-lg bg-blue-500/10 border border-blue-200">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Clock className="h-4 w-4 text-blue-600" />
+                                  <span className="text-sm font-medium text-blue-600">Predicted Time</span>
+                                </div>
+                                <p className="text-2xl font-bold text-blue-700">
+                                  {submittedState.playerPredictedTime?.toFixed(1) ?? '—'} min
+                                </p>
+                              </div>
+                              <div className="p-4 rounded-lg bg-green-500/10 border border-green-200">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Clock className="h-4 w-4 text-green-600" />
+                                  <span className="text-sm font-medium text-green-600">Realized Time</span>
+                                </div>
+                                <p className="text-2xl font-bold text-green-700">
+                                  {submittedState.playerRealizedTime?.toFixed(1) ?? '—'} min
+                                </p>
+                              </div>
                             </div>
-                            <p className="text-2xl font-bold text-green-700">
-                              {submittedState.playerRealizedTime?.toFixed(1)} minutes
-                            </p>
-                          </div>
+                          ) : (
+                            <div className="p-4 rounded-lg bg-muted/50 border border-dashed">
+                              <div className="flex items-center gap-2">
+                                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                                <span className="text-sm text-muted-foreground">Waiting for all players to submit before showing times...</span>
+                              </div>
+                            </div>
+                          )}
 
                           {/* Choice Distribution */}
                           <div className="p-4 rounded-lg bg-muted/50">
@@ -702,11 +773,18 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
                             </div>
                           </div>
 
-                          {/* Waiting Message */}
-                          <div className="flex items-center justify-center gap-2 text-muted-foreground">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            <span className="text-sm">Waiting for admin to advance round...</span>
-                          </div>
+{/* Waiting Message */}
+                          {submittedState.allSubmitted ? (
+                            <div className="flex items-center justify-center gap-2 text-green-600">
+                              <Users className="h-4 w-4" />
+                              <span className="text-sm font-medium">All players have submitted — waiting for admin to advance the round.</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span className="text-sm">Waiting for other players to make their choices...</span>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="space-y-4">
@@ -721,7 +799,7 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
                               </span>{" "}
                               with a travel time of{" "}
                               <span className="font-medium text-foreground">
-                                {gameState.selectedRoute?.totalTravelTime.toFixed(1)}{" "}
+                                {gameState.selectedRoute?.totalTravelTime?.toFixed(1) ?? '—'}{" "}
                                 minutes
                               </span>
                             </p>
@@ -893,9 +971,9 @@ export function TrafficSimulation({ initialSessionId = null }: { initialSessionI
                                     <p className="text-xs text-muted-foreground">Predicted Time</p>
                                     <p className="font-bold">{log.predictedTime.toFixed(1)} min</p>
                                   </div>
-                                  <div className="p-2 rounded bg-muted/50">
+<div className="p-2 rounded bg-muted/50">
                                     <p className="text-xs text-muted-foreground">Realized Time</p>
-                                    <p className="font-bold">{log.realizedTime.toFixed(1)} min</p>
+                                    <p className="font-bold">{log.realizedTime != null ? log.realizedTime.toFixed(1) + ' min' : '—'}</p>
                                   </div>
                                 </div>
                                 

@@ -111,6 +111,72 @@ export async function GET(request: NextRequest) {
         travel_time: edge.travelTime,
       }));
 
+// Check if ALL players in the room have submitted
+      const { data: allSessions } = await supabase
+        .from("simulation_sessions")
+        .select("id, has_submitted")
+        .eq("room_id", room.id);
+
+      const allSubmitted = allSessions?.every(s => s.has_submitted) ?? false;
+
+      // Get choice distribution from only this room's sessions
+      const roomSessionIds = (allSessions ?? []).map(s => s.id);
+      const { data: roomLogs } = await supabase
+        .from("round_logs")
+        .select("chosen_route, session_id")
+        .in("session_id", roomSessionIds)
+        .eq("round", room.current_round);
+
+      const roomDistribution: Record<string, number> = {};
+      roomLogs?.forEach(log => {
+        roomDistribution[log.chosen_route] = (roomDistribution[log.chosen_route] || 0) + 1;
+      });
+      const roomTotalSubmitted = roomLogs?.length || 0;
+
+      // If all submitted, compute realized time on the fly from aggregated flows
+      let playerRealizedTime: number | null = null;
+      if (allSubmitted && playerLog && roomLogs && roomLogs.length > 0) {
+        const { data: dbEdges } = await supabase
+          .from("traffic_edges")
+          .select("*")
+          .eq("room_id", room.id);
+
+        if (dbEdges) {
+          const { bprTime } = await import("@/lib/traffic-simulation");
+
+          // Add +1 flow per player on their chosen route
+          const flowMap: Record<string, number> = {};
+          for (const log of roomLogs) {
+            const { data: logDetail } = await supabase
+              .from("round_logs")
+              .select("route_path")
+              .eq("session_id", log.session_id)
+              .eq("round", room.current_round)
+              .single();
+            if (logDetail?.route_path) {
+              const path: string[] = logDetail.route_path;
+              for (let i = 0; i < path.length - 1; i++) {
+                const edgeId = `${room.id}_${path[i]}-${path[i + 1]}`;
+                flowMap[edgeId] = (flowMap[edgeId] || 0) + 1;
+              }
+            }
+          }
+
+          // Compute realized time for this player's chosen route
+          const playerPath: string[] = playerLog.route_path;
+          let realizedTime = 0;
+          for (let i = 0; i < playerPath.length - 1; i++) {
+            const edgeId = `${room.id}_${playerPath[i]}-${playerPath[i + 1]}`;
+            const edge = dbEdges.find((e: any) => e.id === edgeId);
+            if (edge) {
+              const aggregatedFlow = edge.current_flow + (flowMap[edgeId] || 0);
+              realizedTime += bprTime(edge.free_time, aggregatedFlow, edge.capacity);
+            }
+          }
+          playerRealizedTime = Math.round(realizedTime * 100) / 100;
+        }
+      }
+
       return NextResponse.json({
         status: "submitted_waiting",
         room_id: room.id,
@@ -119,9 +185,11 @@ export async function GET(request: NextRequest) {
         num_rounds: room.total_rounds,
         message: "Choice submitted. Waiting for all players and admin to advance.",
         player_choice: playerLog?.chosen_route || null,
-        player_realized_time: playerLog?.realized_time || null,
-        choice_distribution: distribution,
-        total_submitted: totalPlayers,
+        player_predicted_time: playerLog?.predicted_time || null,
+        player_realized_time: playerRealizedTime,
+        all_submitted: allSubmitted,
+        choice_distribution: roomDistribution,
+        total_submitted: roomTotalSubmitted,
         predicted_times: predictedTimes,
         network: { nodes: networkNodes, edges: networkEdges },
         routes: routesData,

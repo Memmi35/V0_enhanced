@@ -66,27 +66,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "error", message: "Invalid route selection" }, { status: 400 });
     }
 
-    // Use current predicted time (based on current flow state - same for all users)
-    const predictedTime = selectedRouteData.totalTravelTime;
+const strippedEdges = edges.map((e) => ({ ...e, id: e.id.replace(`${room.id}_`, "") }));
 
-    // Calculate realized time based on CURRENT edge state (not incrementing flow yet)
-    // This ensures all users who select before admin advances see the same predicted times
-    const strippedEdges = edges.map((e) => ({ ...e, id: e.id.replace(`${room.id}_`, "") }));
-    let realizedTime = 0;
-    for (let i = 0; i < selectedRouteData.path.length - 1; i++) {
-      const fromNode = selectedRouteData.path[i];
-      const toNode = selectedRouteData.path[i + 1];
-      const edge = strippedEdges.find(
-        (e) => (e.from === fromNode && e.to === toNode) ||
-               (e.from === toNode && e.to === fromNode)
-      );
-      if (edge) realizedTime += edge.travelTime;
-    }
+// Predicted time = BPR with only this user's +1 flow added to their chosen route
+const { bprTime } = await import("@/lib/traffic-simulation");
+let predictedTime = 0;
+for (let i = 0; i < selectedRouteData.path.length - 1; i++) {
+  const fromNode = selectedRouteData.path[i];
+  const toNode = selectedRouteData.path[i + 1];
+  const edge = strippedEdges.find(
+    (e) => (e.from === fromNode && e.to === toNode) ||
+           (e.from === toNode && e.to === fromNode)
+  );
+  if (edge) predictedTime += bprTime(edge.freeTime, edge.flow + 1, edge.capacity);
+}
+predictedTime = Math.round(predictedTime * 100) / 100;
 
-    const realizedTimes: Record<string, number> = {};
-    const routeFlows: Record<string, number> = {};
+// Realized time is unknown until admin advances — will be computed in room-action
+const realizedTime = null;
+
+const routeFlows: Record<string, number> = {};
     for (const [name, route] of Object.entries(routes)) {
-      let totalTime = 0;
       let totalFlow = 0;
       for (let i = 0; i < route.path.length - 1; i++) {
         const fromNode = route.path[i];
@@ -95,9 +95,8 @@ export async function POST(request: NextRequest) {
           (e) => (e.from === fromNode && e.to === toNode) ||
                  (e.from === toNode && e.to === fromNode)
         );
-        if (edge) { totalTime += edge.travelTime; totalFlow += edge.flow; }
+        if (edge) totalFlow += edge.flow;
       }
-      realizedTimes[name] = Math.round(totalTime * 100) / 100;
       routeFlows[name] = Math.round(totalFlow * 100) / 100;
     }
 
@@ -110,8 +109,8 @@ export async function POST(request: NextRequest) {
       destination,
       chosen_route: chosenRoute,
       decision_latency: Math.round(decisionLatency * 100) / 100,
-      predicted_time: Math.round(predictedTime * 100) / 100,
-      realized_time: Math.round(realizedTime * 100) / 100,
+      predicted_time: predictedTime,
+      realized_time: 0,
       route_a_flow: routeFlows["Route A"] || 0,
       route_b_flow: routeFlows["Route B"] || 0,
       route_c_flow: routeFlows["Route C"] || 0,
@@ -132,9 +131,9 @@ export async function POST(request: NextRequest) {
         round: room.current_round,
         chosen_route: chosenRoute,
         chosen_route_path: selectedRouteData.path,
-        predicted_time: Math.round(predictedTime * 100) / 100,
-        realized_time: Math.round(realizedTime * 100) / 100,
-        realized_times: realizedTimes,
+        predicted_time: predictedTime,
+        realized_time: null,
+        //realized_times: realizedTimes,
         origin,
         destination,
         route_flows: routeFlows,
