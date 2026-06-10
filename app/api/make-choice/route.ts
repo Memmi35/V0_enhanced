@@ -93,16 +93,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Insert round log
-    await pool.query(`
+await pool.query(`
       INSERT INTO round_logs 
-        (session_id, round, user_id, origin, destination, chosen_route, decision_latency, predicted_time, realized_time, route_a_flow, route_b_flow, route_c_flow, route_path, route_edges, grid_size)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        (session_id, round, user_id, origin, destination, chosen_route, initial_choice, final_choice, decision_latency, predicted_time, realized_time, route_a_flow, route_b_flow, route_c_flow, route_path, route_edges, grid_size)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
     `, [
       sessionId,
       room.current_round,
       session.user_id,
       origin,
       destination,
+      chosenRoute,
+      chosenRoute,
       chosenRoute,
       Math.round(decisionLatency * 100) / 100,
       predictedTime,
@@ -127,6 +129,8 @@ export async function POST(request: NextRequest) {
       round_result: {
         round: room.current_round,
         chosen_route: chosenRoute,
+      initial_choice: chosenRoute,
+      final_choice: chosenRoute,
         chosen_route_path: selectedRouteData.path,
         predicted_time: predictedTime,
         realized_time: null,

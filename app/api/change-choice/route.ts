@@ -112,8 +112,9 @@ export async function POST(request: NextRequest) {
         route_b_flow = $5,
         route_c_flow = $6,
         route_path = $7,
-        route_edges = $8
-      WHERE id = $9
+        route_edges = $8,
+        final_choice = $9
+      WHERE id = $10
     `, [
       newRoute,
       predictedTime,
@@ -123,6 +124,7 @@ export async function POST(request: NextRequest) {
       routeFlows["Route C"] || 0,
       newRouteData.path,
       JSON.stringify(newRouteData.edges),
+      newRoute,
       currentLog.id,
     ]);
 

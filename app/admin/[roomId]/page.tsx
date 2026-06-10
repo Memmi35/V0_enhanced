@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users, CheckCircle2, Clock, BarChart3, Trophy, History, TrendingUp } from "lucide-react";
-
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SessionDataTable } from "@/components/session-data-table";
 export default function AdminPage() {
   const { roomId } = useParams();
   const [roomDetails, setRoomDetails] = useState<any>(null);
@@ -63,6 +64,12 @@ export default function AdminPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          <Tabs defaultValue="overview">
+            <TabsList className="mb-4">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="session-data">Session Data</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="space-y-6">
           <div className="flex justify-between items-center text-lg">
             <span>Status: <strong>{roomDetails.room.status}</strong></span>
             <span>Current Round: <strong>{roomDetails.room.current_round} / {roomDetails.room.total_rounds}</strong></span>
@@ -300,6 +307,11 @@ export default function AdminPage() {
               </div>
             </div>
           )}
+</TabsContent>
+            <TabsContent value="session-data">
+              <SessionDataTable roomId={roomId as string} />
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
     </div>

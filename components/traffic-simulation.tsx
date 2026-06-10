@@ -830,12 +830,13 @@ useEffect(() => {
                                 <p className="text-sm font-medium mb-3">Why did you choose {submittedState.playerChoice}?</p>
                                 <div className="flex flex-wrap gap-2 mb-3">
                                   {[
-                                    "Shortest path",
-                                    "Less congestion",
-                                    "Habit / familiar route",
-                                    "Random choice",
-                                    "Following others",
-                                  ].map(option => (
+                                  "Shortest path",
+                                  "Less congestion",
+                                  "Habit / familiar route",
+                                  "Random choice",
+                                  "Following others",
+                                  "Other",
+                                ].map(option => (
                                     <button
                                       key={option}
                                       onClick={() => setChoiceReason(prev => prev === option ? null : option)}
@@ -852,14 +853,17 @@ useEffect(() => {
                                 <textarea
                                   value={choiceReasonText}
                                   onChange={e => setChoiceReasonText(e.target.value)}
-                                  placeholder="Add more detail (optional)..."
+                                  placeholder={choiceReason === "Other" ? "Please describe your reason..." : "Add more detail (optional)..."}
                                   className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary"
                                   rows={2}
                                 />
                                 <Button
                                   size="sm"
                                   className="w-full mt-2"
-                                  disabled={!choiceReason}
+                                  disabled={
+                                    !choiceReason && !choiceReasonText.trim() ||
+                                    choiceReason === "Other" && !choiceReasonText.trim()
+                                  }
                                   onClick={async () => {
                                     try {
                                       await fetch("/api/save-reason", {
